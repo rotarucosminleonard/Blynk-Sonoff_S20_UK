@@ -1,4 +1,4 @@
-#define NAMEandVERSION "Blynk-Sonoff_V1.0_S20_1"
+#define NAMEandVERSION "Blynk-Sonoff_V1.1_S20_1"
 
 /*************************************************************
   Download latest Blynk library here:
@@ -15,25 +15,14 @@
     Follow us:                  http://www.fb.com/blynkapp
                                 http://twitter.com/blynk_app
 
-  Blynk library is licensed under MIT license
-  This example code is in public domain.
-
- *************************************************************
-
-  This example shows how value can be pushed from Arduino to
-  the Blynk App.
-
-  WARNING :
-  For this example you'll need Adafruit DHT sensor libraries:
-    https://github.com/adafruit/Adafruit_Sensor
-    https://github.com/adafruit/DHT-sensor-library
-
-
-    Value Display widget attached to V6
  *************************************************************/
 
 /* Comment this out to disable prints and save space */
 //#define BLYNK_PRINT Serial
+
+//#define BLYNK_DEBUG
+#define BLYNK_TIMEOUT_MS  500  // must be BEFORE BlynkSimpleEsp8266.h doesn't work !!!
+#define BLYNK_HEARTBEAT   17   // must be BEFORE BlynkSimpleEsp8266.h works OK as 17s
 
 
 #include <ESP8266WiFi.h>
@@ -43,7 +32,14 @@
 WidgetRTC rtc;
 BlynkTimer timer;
 
+char ssid[]            = "SSID";
+char pass[]            = "PASSWORD";
+char auth[]            = "AUTHKEY";
+//char server[]          = "blynk-cloud.com";
+//char server[]          = IPAddress(192,168,1,3);
+unsigned int port      = 1234; //use your own port of the server
 
+bool online = 0;
 
 //  App project setup:
 /*
@@ -76,16 +72,6 @@ int Minute = 0;
 bool connection;  // monitoring the connection
 int connectionattempts;
 
-// You should get Auth Token in the Blynk App.
-// Go to the Project Settings (nut icon).
-char auth[] = "auth";
-
-// Your WiFi credentials.
-// Set password to "" for open networks.
-char ssid[] = "ssid";
-char pass[] = "pass";
-
-
 #define relay 12 //  relay
 #define PushButton 0 // 
 #define ConnectionStatus 13 // background light for the power button to show the connection satus
@@ -117,15 +103,14 @@ void setup()
   // Debug console
 
   WiFi.config(arduino_ip, gateway_ip, subnet_mask);
-
+  Blynk.config(auth, IPAddress(192,168,1,2), port);  // I am using the local Server
+  CheckConnection();// It needs to run first to initiate the connection.Same function works for checking the connection!
+  timer.setInterval(10000L, CheckConnection); 
   // You can also specify server:
-  //Blynk.begin(auth, ssid, pass, "blynk-cloud.com", 8442);
-  Blynk.begin(auth, ssid, pass, IPAddress(192, 168, 1, 3), 8441);
-  
-  // Setup a function to be called every second
+  // Blynk.begin(auth, ssid, pass, "blynk-cloud.com", 8442);
+  // Blynk.begin(auth, ssid, pass, IPAddress(192, 168, 1, 3), 8441);
   timer.setInterval(10000L, timesync);
-  timer.setInterval(5000L,  connectionstatus);
-  timer.setInterval(1000L, checkInterval);
+  //timer.setInterval(1000L, checkInterval);
   
 
   pinMode (relay, OUTPUT);
@@ -139,7 +124,9 @@ void setup()
 
 void loop()
 {
-  Blynk.run();
+  if(Blynk.connected()){
+    Blynk.run();
+  }
   timer.run();
   PushButtonONOFF();
 }
@@ -153,8 +140,8 @@ BLYNK_CONNECTED()
 
 void timesync()
 {
-  Blynk.syncVirtual(V9);
-  rtc.begin();
+    Blynk.syncVirtual(V9);
+    rtc.begin();
 }
 
 void PushButtonONOFF()
@@ -181,22 +168,26 @@ void SocketOn()
 {
   digitalWrite(relay, HIGH);
   SocketStatus = 1;
-  ledSocketStatus.on();
-  Blynk.virtualWrite(V1, SocketStatus);
-  //  Serial.println("SocketOn");
-  yield();
-  ledSocketStatus.on();
+  if(Blynk.connected()){
+    ledSocketStatus.on();
+    Blynk.virtualWrite(V1, SocketStatus);
+    //  Serial.println("SocketOn");
+    yield();
+    ledSocketStatus.on();
+  }
 }
 
 void SocketOff()
 {
   digitalWrite(relay, LOW);
   SocketStatus = 0;
-  ledSocketStatus.off();
-  Blynk.virtualWrite(V1, SocketStatus);
-  //Serial.println("SocketOff");
-  yield();
-  ledSocketStatus.off();
+  if(Blynk.connected()){
+    ledSocketStatus.off();
+    Blynk.virtualWrite(V1, SocketStatus);
+    //Serial.println("SocketOff");
+    yield();
+    ledSocketStatus.off();
+  }
 }
 
 BLYNK_WRITE(V1)   // 
@@ -216,32 +207,53 @@ BLYNK_WRITE(V1)   //
   }
 }
 
-void connectionstatus()
-{
-  connection = Blynk.connected();
 
-  if (connection == 0)
-  {
-      digitalWrite(ConnectionStatus, HIGH);
-      connectionattempts ++;
-      Serial.println();
-      Serial.print("connectionattempts");
-      Serial.print(connectionattempts);
-      Serial.println();
-      yield();
+
+void CheckConnection(){    // check every 11s if connected to Blynk server
+  if(!Blynk.connected()){
+    online = 0;
+    yield();
+    if (WiFi.status() != WL_CONNECTED)
+    {
+      Serial.println("Not connected to Wifi! Connect...");
+      //Blynk.connectWiFi(ssid, pass); // used with Blynk.connect() in place of Blynk.begin(auth, ssid, pass, server, port);
+      WiFi.begin(ssid, pass);
+      delay(400); //give it some time to connect
+      if (WiFi.status() != WL_CONNECTED)
+      {
+        Serial.println("Cannot connect to WIFI!");
+        online = 0;
+        digitalWrite(ConnectionStatus, HIGH);
+      }
+      else
+      {
+        Serial.println("Connected to wifi!");
+      }
+    }
+    
+    if ( WiFi.status() == WL_CONNECTED && !Blynk.connected() )
+    {
+      Serial.println("Not connected to Blynk Server! Connecting..."); 
+      Blynk.connect();  // // It has 3 attempts of the defined BLYNK_TIMEOUT_MS to connect to the server, otherwise it goes to the enxt line 
+      if(!Blynk.connected()){
+        Serial.println("Connection failed!"); 
+        online = 0;
+        digitalWrite(ConnectionStatus, HIGH);
+      }
+      else
+      {
+        online = 1;
+        digitalWrite(ConnectionStatus, LOW);
+        chkWifiSignal();
+      }
+    }
   }
-  else 
-  {
-    digitalWrite(ConnectionStatus, LOW);
-    connectionattempts = 0;
-    chkWifiSignal();
-  }
-  
-  if (connectionattempts > 2)
-  {
-    ESP.restart();  
-    //WiFi.disconnect(); 
-    //WiFi.disconnect(true); 
+  else{
+    Serial.println("Connected to Blynk server!"); 
+    online = 1;
+    digitalWrite(ConnectionStatus, LOW); 
+    chkWifiSignal();   
+    checkInterval();
   }
 }
 
@@ -275,7 +287,6 @@ BLYNK_WRITE(V6)   // ON 1 = GPSAutoOFF is activated, turn off the socket if it i
   //restoring int value
   Mode = param.asInt();
   yield();
-
 }
 
 BLYNK_WRITE(V4)   // ON 1 = you are in the radius, youre at home  - OFF 0 = you left the home
@@ -298,10 +309,6 @@ BLYNK_WRITE(V4)   // ON 1 = you are in the radius, youre at home  - OFF 0 = you 
     {
       SocketOff(); // Turn Off the Socket if the Feature is activated and there is nobody at home  
     }
-    else
-    {
-      SocketOn();
-    }
   }
 }
 
@@ -318,6 +325,7 @@ BLYNK_WRITE(V7) {
 
 void checkInterval()
 {
+    timesync();
     Blynk.syncVirtual(V7);
 //    String currentTime = String(Hour) + ":" + String(Minute) + ":" + String(second());
 //    //String currentDate = String(day()) + " " + month() + " " + year();
